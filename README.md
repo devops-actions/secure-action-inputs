@@ -10,6 +10,7 @@ When a threat is found the step fails with a non-zero exit code and writes a det
 
 | Category | What is flagged |
 |---|---|
+| **Homoglyphs** | Cyrillic, Greek, and fullwidth Latin letters that look identical to ASCII (e.g. Cyrillic `а`→`a`, `о`→`o`, `р`→`p`; Greek `Ο`→`O`; fullwidth `Ａ`→`A`). Used in IDN homograph and supply-chain spoofing attacks |
 | **Hidden Unicode** | Zero-width spaces (U+200B/C/D), BOM (U+FEFF), soft hyphen, null byte, LTR/RTL marks, word joiner, line/paragraph separators |
 | **Bidirectional / Trojan Source** | All BIDI control characters (U+202A–202E, U+2066–2069, U+061C) that make malicious content appear benign to reviewers |
 | **Shell injection** | Backtick substitution `` `cmd` ``, dollar-paren `$(cmd)`, semicolon/pipe chaining to `bash`, `curl`, `python`, etc. |
@@ -77,6 +78,7 @@ When threats are detected the step fails and the Job Summary shows a table like:
 | Field | Attack Type | Details |
 |-------|-------------|---------|
 | `pull_request.title` | hidden_unicode | Hidden Unicode character: Zero Width Space (U+200B) (×1) |
+| `pull_request.head.ref` | homoglyph | Homoglyph attack: Cyrillic letters visually similar to Latin ASCII (e.g. а→a, е→e, о→o, р→p, с→c, х→x) (×2) |
 | `pull_request.body` | bidi_attack | Bidirectional text (Trojan Source) attack: Right-to-Left Override (U+202E) (×1) |
 | `pull_request.head.ref` | shell_injection | Potential shell injection: Backtick command substitution |
 | `issue.body` | script_injection | Potential script injection: HTML script tag |

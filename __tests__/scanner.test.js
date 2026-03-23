@@ -8,6 +8,7 @@ const {
   checkShellInjection,
   checkPathTraversal,
   checkScriptInjection,
+  checkHomoglyphs,
   checkTemplateInjection,
 } = require('../src/scanner');
 
@@ -219,6 +220,55 @@ describe('checkTemplateInjection', () => {
   test('returns empty array for clean text', () => {
     const findings = checkTemplateInjection('Hello world!');
     expect(findings).toHaveLength(0);
+  });
+});
+
+describe('checkHomoglyphs', () => {
+  test('detects Cyrillic lookalike for Latin a (U+0430)', () => {
+    const findings = checkHomoglyphs('ex\u0430mple'); // Cyrillic 'а' instead of Latin 'a'
+    expect(findings).toHaveLength(1);
+    expect(findings[0].type).toBe('homoglyph');
+    expect(findings[0].description).toContain('Cyrillic');
+    expect(findings[0].count).toBe(1);
+  });
+
+  test('detects Cyrillic lookalike for Latin o (U+043E)', () => {
+    const findings = checkHomoglyphs('hell\u043E'); // Cyrillic 'о' instead of Latin 'o'
+    expect(findings).toHaveLength(1);
+    expect(findings[0].type).toBe('homoglyph');
+    expect(findings[0].description).toContain('Cyrillic');
+  });
+
+  test('detects Greek uppercase lookalike (U+039F = Ο looks like O)', () => {
+    const findings = checkHomoglyphs('hell\u039F'); // Greek Ο instead of Latin O
+    expect(findings).toHaveLength(1);
+    expect(findings[0].type).toBe('homoglyph');
+    expect(findings[0].description).toContain('Greek');
+  });
+
+  test('detects fullwidth Latin letters (U+FF21 = Ａ)', () => {
+    const findings = checkHomoglyphs('\uFF21\uFF42\uFF43'); // Ａｂｃ
+    expect(findings).toHaveLength(1);
+    expect(findings[0].type).toBe('homoglyph');
+    expect(findings[0].description).toContain('Fullwidth');
+  });
+
+  test('counts multiple homoglyphs in one string', () => {
+    // Two Cyrillic lookalikes: а (U+0430) and о (U+043E)
+    const findings = checkHomoglyphs('\u0430\u043E');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].count).toBe(2);
+  });
+
+  test('returns empty array for clean ASCII text', () => {
+    const findings = checkHomoglyphs('hello world 123');
+    expect(findings).toHaveLength(0);
+  });
+
+  test('scanString includes homoglyph type in combined results', () => {
+    const findings = scanString('pay\u043Eut'); // Cyrillic о in "payout"
+    const types = findings.map((f) => f.type);
+    expect(types).toContain('homoglyph');
   });
 });
 

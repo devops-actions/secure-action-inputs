@@ -68,6 +68,36 @@ const SCRIPT_INJECTION_PATTERNS = [
 ];
 
 /**
+ * Homoglyph (lookalike) characters from non-Latin scripts.
+ * Attackers replace ASCII letters with visually identical Unicode characters
+ * from other scripts (Cyrillic, Greek, fullwidth Latin) to spoof identifiers,
+ * URLs, branch names, or commands while bypassing string-equality checks.
+ * Common IDN homograph / supply-chain attack vector.
+ */
+const HOMOGLYPH_RANGES = [
+  {
+    // Cyrillic lowercase: а е о р с х (look like a e o p c x)
+    // Cyrillic uppercase: А В Е К М Н О Р С Т Х (look like A B E K M H O P C T X)
+    pattern: /[\u0430\u0435\u043E\u0440\u0441\u0445\u0410\u0412\u0415\u041A\u041C\u041D\u041E\u0420\u0421\u0422\u0425]/g,
+    script: 'Cyrillic',
+    description: 'Cyrillic letters visually similar to Latin ASCII (e.g. а→a, е→e, о→o, р→p, с→c, х→x)',
+  },
+  {
+    // Greek uppercase: Α Β Ε Ζ Η Ι Κ Μ Ν Ο Ρ Τ Υ Χ (look like A B E Z H I K M N O P T Y X)
+    // Greek lowercase: ο ν ρ (look like o v p)
+    pattern: /[\u0391\u0392\u0395\u0396\u0397\u0399\u039A\u039C\u039D\u039F\u03A1\u03A4\u03A5\u03A7\u03BF\u03BD\u03C1]/g,
+    script: 'Greek',
+    description: 'Greek letters visually similar to Latin ASCII (e.g. Α→A, Ο→O, Ρ→P, ο→o)',
+  },
+  {
+    // Fullwidth Latin: Ａ–Ｚ (U+FF21–U+FF3A) and ａ–ｚ (U+FF41–U+FF5A)
+    pattern: /[\uFF21-\uFF3A\uFF41-\uFF5A]/g,
+    script: 'Fullwidth Latin',
+    description: 'Fullwidth Latin letters that look like ASCII (e.g. Ａ→A, ａ→a)',
+  },
+];
+
+/**
  * Template/expression injection patterns.
  * These can be used to escape template contexts or inject expressions.
  */
@@ -169,6 +199,26 @@ function checkScriptInjection(text) {
 }
 
 /**
+ * Checks for homoglyph (lookalike) characters from non-Latin scripts.
+ * @param {string} text - The string to check.
+ * @returns {Array} Array of finding objects.
+ */
+function checkHomoglyphs(text) {
+  const findings = [];
+  for (const { pattern, script, description } of HOMOGLYPH_RANGES) {
+    const matches = text.match(pattern);
+    if (matches) {
+      findings.push({
+        type: 'homoglyph',
+        description: `Homoglyph attack: ${description}`,
+        count: matches.length,
+      });
+    }
+  }
+  return findings;
+}
+
+/**
  * Checks for template/expression injection patterns.
  * @param {string} text - The string to check.
  * @returns {Array} Array of finding objects.
@@ -198,6 +248,7 @@ function scanString(text) {
   findings.push(...checkShellInjection(text));
   findings.push(...checkPathTraversal(text));
   findings.push(...checkScriptInjection(text));
+  findings.push(...checkHomoglyphs(text));
   findings.push(...checkTemplateInjection(text));
   return findings;
 }
@@ -235,5 +286,6 @@ module.exports = {
   checkShellInjection,
   checkPathTraversal,
   checkScriptInjection,
+  checkHomoglyphs,
   checkTemplateInjection,
 };
