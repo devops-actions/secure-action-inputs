@@ -1,0 +1,21 @@
+{
+  "name": "secure-action-inputs",
+  "version": "1.0.0",
+  "description": "Scan GitHub Actions event inputs for common attack vectors and injection attempts",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build src/main.js -o dist --license licenses.txt",
+    "test": "jest",
+    "lint": "eslint src __tests__"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.38.4",
+    "jest": "^30.3.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/__tests__/**/*.test.js"
+    ]
+  }
+}
