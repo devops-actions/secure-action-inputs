@@ -1,0 +1,9 @@
+name: 'Secure Action Inputs'
+description: 'Scan GitHub Actions event inputs and payloads for common attack vectors including hidden Unicode, bidirectional text attacks, and injection attempts'
+author: 'devops-actions'
+branding:
+  icon: 'shield'
+  color: 'red'
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
