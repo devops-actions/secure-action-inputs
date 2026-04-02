@@ -2,7 +2,7 @@
 
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Secure%20Action%20Inputs-blue?logo=github)](https://github.com/marketplace/actions/secure-action-inputs)
 
-A GitHub Action that scans the full event payload for common attack vectors — hidden Unicode characters, bidirectional text (Trojan Source), shell injection, path traversal, script injection, and template expression injection. Use it in any workflow to detect whether an actor (human or bot) is attempting to inject malicious content through PR titles, branch names, issue bodies, comments, or any other event field.
+A GitHub Action that scans the full event payload for common attack vectors — hidden Unicode characters, bidirectional text (Trojan Source), shell injection, path traversal, script injection, template expression injection, and AI prompt injection. Use it in any workflow to detect whether an actor (human or bot) is attempting to inject malicious content through PR titles, branch names, issue bodies, comments, or any other event field.
 
 When a threat is found the step fails with a non-zero exit code and writes a detailed report to the [Job Summary](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/workflow-commands-for-github-actions#adding-a-job-summary).
 
@@ -13,10 +13,11 @@ When a threat is found the step fails with a non-zero exit code and writes a det
 | **Homoglyphs** | Cyrillic, Greek, and fullwidth Latin letters that look identical to ASCII (e.g. Cyrillic `а`→`a`, `о`→`o`, `р`→`p`; Greek `Ο`→`O`; fullwidth `Ａ`→`A`). Used in IDN homograph and supply-chain spoofing attacks |
 | **Hidden Unicode** | Zero-width spaces (U+200B/C/D), BOM (U+FEFF), soft hyphen, null byte, LTR/RTL marks, word joiner, line/paragraph separators |
 | **Bidirectional / Trojan Source** | All BIDI control characters (U+202A–202E, U+2066–2069, U+061C) that make malicious content appear benign to reviewers |
-| **Shell injection** | Backtick substitution `` `cmd` ``, dollar-paren `$(cmd)`, semicolon/pipe chaining to `bash`, `curl`, `python`, etc. |
+| **Shell injection** | Backtick substitution `` `cmd` ``, dollar-paren `$(cmd)`, `eval()`/`exec()` code execution, semicolon/pipe chaining to `bash`, `curl`, `python`, etc. |
 | **Path traversal** | `../` and `..\` sequences that can escape intended directories |
 | **Script injection** | `<script>`, `javascript:`, `<iframe>`, `onerror=` and other HTML event handler attributes |
 | **Template/expression injection** | `${{` (GitHub Actions context leakage) and `{{...}}` template expressions |
+| **Prompt injection** | AI/LLM override phrases such as `ignore previous instructions`, `pretend you are`, `jailbreak`, and other directives designed to manipulate AI assistants that process event data |
 
 ## Usage
 
