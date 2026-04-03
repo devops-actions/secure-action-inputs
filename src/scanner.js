@@ -49,11 +49,16 @@ const SHELL_INJECTION_PATTERNS = [
   { pattern: /`[^`]+`/, name: 'Backtick command substitution' },
   { pattern: /\$\([^)]+\)/, name: 'Dollar-paren command substitution $()' },
   {
-    pattern: /[;&|]\s*(rm|curl|wget|bash|sh|python|python3|perl|ruby|nc|netcat|ncat|powershell|pwsh)\b/i,
+    pattern: /[;&|]\s*(rm|curl|wget|bash|sh|python|python3|perl|ruby|nc|netcat|ncat|powershell|pwsh|node)\b/i,
     name: 'Semicolon/pipe chaining to shell command',
   },
   { pattern: /\|\|\s*\w/, name: 'OR operator command chaining' },
-  { pattern: /&&\s*(rm|curl|wget|bash|sh|python|python3|perl|ruby)\b/i, name: 'AND operator chaining to shell command' },
+  {
+    pattern: /&&\s*(rm|curl|wget|bash|sh|python|python3|perl|ruby|node)\b/i,
+    name: 'AND operator chaining to shell command',
+  },
+  { pattern: /\beval\s*\(/, name: 'eval() code execution' },
+  { pattern: /\bexec\s*\(/, name: 'exec() code execution' },
 ];
 
 /**
@@ -94,6 +99,58 @@ const HOMOGLYPH_RANGES = [
     pattern: /[\uFF21-\uFF3A\uFF41-\uFF5A]/g,
     script: 'Fullwidth Latin',
     description: 'Fullwidth Latin letters that look like ASCII (e.g. Ａ→A, ａ→a)',
+  },
+];
+
+/**
+ * Prompt injection patterns targeting AI/LLM systems.
+ * Attackers craft event fields (PR titles, branch names, issue bodies, comments)
+ * with directives designed to override or manipulate AI assistants that process
+ * GitHub event data — for example Copilot, GitHub Actions AI steps, or any
+ * workflow that feeds event payload strings into an LLM.
+ * Inspired by attack patterns identified by the PromptShield project:
+ * https://github.com/Zero-Harm-AI-LLC/promptshield
+ */
+const PROMPT_INJECTION_PATTERNS = [
+  {
+    pattern: /ignore\s+(all\s+)?previous\s+instructions/i,
+    name: 'Ignore previous instructions override',
+  },
+  {
+    pattern: /disregard\s+(all\s+|your\s+)?(previous\s+|prior\s+)?(instructions|system\s+prompt|rules|guidelines|constraints)/i,
+    name: 'Disregard instructions override',
+  },
+  {
+    pattern: /forget\s+(all\s+|your\s+)?(previous\s+|prior\s+)?(instructions|system\s+prompt|rules|guidelines|context)/i,
+    name: 'Forget instructions override',
+  },
+  {
+    pattern: /override\s+(the\s+|your\s+)?(previous\s+|prior\s+)?(instructions|system\s+prompt|rules|guidelines)/i,
+    name: 'Override instructions attack',
+  },
+  {
+    pattern: /\bpretend\s+you\s+are\b/i,
+    name: 'Identity override (pretend you are)',
+  },
+  {
+    pattern: /\byour\s+new\s+(task|instructions?|rules?|directive)\s+(is|are)\b/i,
+    name: 'New task/instructions injection',
+  },
+  {
+    pattern: /\bnew\s+instructions?\s*:/i,
+    name: 'New instructions injection',
+  },
+  {
+    pattern: /\bsystem\s+prompt\s*:/i,
+    name: 'System prompt injection attempt',
+  },
+  {
+    pattern: /\bjailbreak\s+(mode|prompt|bypass|override)\b|\benable\s+jailbreak\b/i,
+    name: 'Jailbreak attempt',
+  },
+  {
+    pattern: /\bDAN\s+(mode|jailbreak|prompt)\b/i,
+    name: 'DAN (Do Anything Now) jailbreak',
   },
 ];
 
@@ -237,6 +294,26 @@ function checkTemplateInjection(text) {
 }
 
 /**
+ * Checks for AI/LLM prompt injection patterns.
+ * These are phrases designed to override or manipulate AI assistants that
+ * process GitHub event data (e.g. PR titles, branch names, issue bodies).
+ * @param {string} text - The string to check.
+ * @returns {Array} Array of finding objects.
+ */
+function checkPromptInjection(text) {
+  const findings = [];
+  for (const { pattern, name } of PROMPT_INJECTION_PATTERNS) {
+    if (pattern.test(text)) {
+      findings.push({
+        type: 'prompt_injection',
+        description: `Potential AI prompt injection: ${name}`,
+      });
+    }
+  }
+  return findings;
+}
+
+/**
  * Scans a string value for all known attack vectors.
  * @param {string} text - The string to scan.
  * @returns {Array} Array of finding objects.
@@ -250,6 +327,7 @@ function scanString(text) {
   findings.push(...checkScriptInjection(text));
   findings.push(...checkHomoglyphs(text));
   findings.push(...checkTemplateInjection(text));
+  findings.push(...checkPromptInjection(text));
   return findings;
 }
 
@@ -288,4 +366,5 @@ module.exports = {
   checkScriptInjection,
   checkHomoglyphs,
   checkTemplateInjection,
+  checkPromptInjection,
 };
