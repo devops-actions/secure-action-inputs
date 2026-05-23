@@ -80,7 +80,7 @@ function buildSummary(findings) {
   lines.push('');
   lines.push('| Type | Description |');
   lines.push('|------|-------------|');
-  lines.push('| `hidden_unicode` | Invisible Unicode characters (zero-width spaces, BOM, null bytes, etc.) that can hide malicious content |');
+  lines.push('| `hidden_unicode` | Invisible Unicode characters (zero-width spaces, BOM, null bytes, Unicode Tag Characters U+E0000–E007F for AI instruction embedding, Variation Selectors Supplement U+E0100–E01EF for Glassworm attacks) that can hide malicious content |');
   lines.push('| `bidi_attack` | Bidirectional text control characters (Trojan Source) that alter how code is visually rendered |');
   lines.push('| `shell_injection` | Shell command injection patterns (backticks, `$()`, piping to shell) |');
   lines.push('| `path_traversal` | Directory traversal patterns (`../`) that can escape intended directories |');
