@@ -11,6 +11,14 @@
  * Hidden/invisible Unicode characters that can be used to obfuscate content.
  * These characters are typically invisible to the human eye but can be used
  * to hide malicious payloads or bypass security filters.
+ *
+ * CRITICAL additions based on known attack research:
+ * - Unicode Tag Characters (U+E0000–U+E007F): Used to embed invisible AI instructions
+ *   in PR titles, issue bodies, and branch names. Tokenized and followed by LLMs but
+ *   completely invisible to human reviewers and GitHub's PR review UI.
+ *   Reference: Pillar Security "Rules File Backdoor" (March 2025), EmbraceTheRed (Jan 2024)
+ * - Variation Selectors Supplement (U+E0100–U+E01EF): The "Glassworm" attack vector
+ *   that encodes hidden data inside visible text using invisible variation selectors.
  */
 const HIDDEN_UNICODE_CHARS = [
   { pattern: /\u200B/g, name: 'Zero Width Space', codepoint: 'U+200B' },
@@ -26,6 +34,21 @@ const HIDDEN_UNICODE_CHARS = [
   { pattern: /\u2028/g, name: 'Line Separator', codepoint: 'U+2028' },
   { pattern: /\u2029/g, name: 'Paragraph Separator', codepoint: 'U+2029' },
   { pattern: /\uFFFC/g, name: 'Object Replacement Character', codepoint: 'U+FFFC' },
+  // CRITICAL: Unicode Tag Characters — invisible AI instruction embedding
+  // Attackers encode hidden LLM directives using these chars (U+E0020–U+E007E are
+  // invisible lookalikes of printable ASCII, e.g. U+E0068 = invisible 'h').
+  {
+    pattern: /[\u{E0000}-\u{E007F}]/gu,
+    name: 'Unicode Tag Character (invisible AI instruction embedding)',
+    codepoint: 'U+E0000–U+E007F',
+  },
+  // CRITICAL: Variation Selectors Supplement — Glassworm steganographic attack
+  // Hides arbitrary data inside normal-looking text using invisible variation selectors.
+  {
+    pattern: /[\u{E0100}-\u{E01EF}]/gu,
+    name: 'Variation Selector Supplement (Glassworm steganographic attack)',
+    codepoint: 'U+E0100–U+E01EF',
+  },
 ];
 
 /**
@@ -507,7 +530,7 @@ function buildSummary(findings) {
   lines.push('');
   lines.push('| Type | Description |');
   lines.push('|------|-------------|');
-  lines.push('| `hidden_unicode` | Invisible Unicode characters (zero-width spaces, BOM, null bytes, etc.) that can hide malicious content |');
+  lines.push('| `hidden_unicode` | Invisible Unicode characters (zero-width spaces, BOM, null bytes, Unicode Tag Characters U+E0000–E007F for AI instruction embedding, Variation Selectors Supplement U+E0100–E01EF for Glassworm attacks) that can hide malicious content |');
   lines.push('| `bidi_attack` | Bidirectional text control characters (Trojan Source) that alter how code is visually rendered |');
   lines.push('| `shell_injection` | Shell command injection patterns (backticks, `$()`, piping to shell) |');
   lines.push('| `path_traversal` | Directory traversal patterns (`../`) that can escape intended directories |');
