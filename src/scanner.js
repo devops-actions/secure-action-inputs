@@ -365,7 +365,7 @@ function scanValue(value, path = '', findings = []) {
   if (typeof value === 'string') {
     const results = scanString(value);
     if (results.length > 0) {
-      findings.push({ path, results });
+      findings.push({ path, results, value });
     }
   } else if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {

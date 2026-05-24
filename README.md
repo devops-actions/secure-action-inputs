@@ -21,7 +21,7 @@ When a threat is found the step fails with a non-zero exit code and writes a det
 
 ## Usage
 
-Add the action as an early step in any workflow that handles untrusted input. No inputs are required — the action reads the event payload automatically from `GITHUB_EVENT_PATH`.
+Add the action as an early step in any workflow that handles untrusted input. No required inputs — the action reads the event payload automatically from `GITHUB_EVENT_PATH`.
 
 ```yaml
 name: Security scan
@@ -35,10 +35,21 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write          # required for post-comment
+      pull-requests: write   # required for post-comment
     steps:
       - name: Scan event payload for attack vectors
         uses: devops-actions/secure-action-inputs@v1
 ```
+
+### Inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `show-context` | `true` | Show a collapsible context snippet for each finding — the surrounding lines where the issue was detected, with the matched line highlighted. Set to `false` to show only the finding summary table. |
+| `post-comment` | `true` | Post (or update) a scan-results comment on the pull request or issue that triggered the workflow. The action checks for write access first and silently skips if unavailable. Set to `false` to disable. |
+| `github-token` | `${{ github.token }}` | Token used to post the comment. Must have `issues: write` and `pull-requests: write` permissions for the comment feature to work. |
 
 ### Recommended: scan before using event data in shell
 
@@ -74,24 +85,32 @@ When no threats are detected the step passes and the Job Summary shows:
 
 ### Malicious payload
 
-When threats are detected the step fails and the Job Summary shows a table like:
+When threats are detected the step fails and the Job Summary shows a table with per-finding context snippets (collapsed by default):
 
 | Field | Attack Type | Details |
 |-------|-------------|---------|
 | `pull_request.title` | hidden_unicode | Hidden Unicode character: Zero Width Space (U+200B) (×1) |
-| `pull_request.head.ref` | homoglyph | Homoglyph attack: Cyrillic letters visually similar to Latin ASCII (e.g. а→a, е→e, о→o, р→p, с→c, х→x) (×2) |
+| `pull_request.head.ref` | homoglyph | Homoglyph attack: Cyrillic letters visually similar to Latin ASCII (×2) |
 | `pull_request.body` | bidi_attack | Bidirectional text (Trojan Source) attack: Right-to-Left Override (U+202E) (×1) |
-| `pull_request.head.ref` | shell_injection | Potential shell injection: Backtick command substitution |
-| `issue.body` | script_injection | Potential script injection: HTML script tag |
-| `comment.body` | template_injection | Potential template/expression injection: GitHub Actions expression injection ${{ |
 
-And each finding is also emitted as a workflow error annotation:
+Each finding also includes a collapsible **Location** block showing the matched line ± 2 lines of context:
+
+<details>
+<summary>📍 Location: <code>pull_request.title</code> — single-line value</summary>
+
+<pre><code>▶ Fix login bug[ZWSP]
+</code></pre>
+
+</details>
+
+And each finding is emitted as a workflow error annotation:
 
 ```
 ::error::[hidden_unicode] pull_request.title: Hidden Unicode character: Zero Width Space (U+200B) (×1)
-::error::[shell_injection] pull_request.head.ref: Potential shell injection: Backtick command substitution
-::error::Security scan failed: 5 potential attack vector(s) found in 4 field(s). See the step summary for details.
+::error::Security scan failed: 3 potential attack vector(s) found in 3 field(s). See the step summary for details.
 ```
+
+When the `post-comment` input is enabled (default), the same report is posted (or updated) as a comment on the pull request or issue.
 
 ## How it works
 
@@ -99,7 +118,9 @@ And each finding is also emitted as a workflow error annotation:
 2. It recursively walks every field in the payload (objects, arrays, strings).
 3. Each string value is checked against all detector patterns.
 4. Results are aggregated and written to `$GITHUB_STEP_SUMMARY`.
-5. If any findings exist, `process.exitCode` is set to `1` to fail the step.
+5. When `show-context: true` (default), each finding includes a collapsible snippet showing the matched line ± 2 lines of surrounding context.
+6. When `post-comment: true` (default) and the event is a PR or issue, the same report is posted (or updated) as a comment on the PR/issue.
+7. If any findings exist, `process.exitCode` is set to `1` to fail the step.
 
 The action has **zero runtime dependencies** — all logic is bundled into `dist/index.js` with `@vercel/ncc`, and GitHub Actions workflow commands are issued directly over stdout to avoid supply-chain risk from transitive dependencies.
 
