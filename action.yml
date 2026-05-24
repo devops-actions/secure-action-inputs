@@ -4,6 +4,30 @@ author: 'devops-actions'
 branding:
   icon: 'shield'
   color: 'red'
+inputs:
+  show-context:
+    description: >
+      Show a context snippet for each finding — the surrounding lines where the issue was detected,
+      making it easy to locate the exact position of the threat in the field value.
+      Set to 'false' to show only the finding summary without context snippets.
+    required: false
+    default: 'true'
+  post-comment:
+    description: >
+      Post scan findings as a comment on the pull request or issue that triggered this workflow.
+      The action checks for write access before posting and silently skips if unavailable.
+      Set to 'false' to disable this behaviour.
+      Requires 'issues: write' and 'pull-requests: write' permissions on the GITHUB_TOKEN.
+    required: false
+    default: 'true'
+  github-token:
+    description: >
+      GitHub token used to post comments on pull requests and issues.
+      Defaults to the automatically provided GITHUB_TOKEN.
+      The token must have 'issues: write' and 'pull-requests: write' permissions for the
+      post-comment feature to work.
+    required: false
+    default: ${{ github.token }}
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'dist/index.js'
