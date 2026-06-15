@@ -13,7 +13,7 @@
     "lint": "eslint src __tests__"
   },
   "devDependencies": {
-    "@vercel/ncc": "^0.38.4",
+    "@vercel/ncc": "^0.44.0",
     "jest": "^30.4.2"
   },
   "jest": {
