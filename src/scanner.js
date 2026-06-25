@@ -229,11 +229,16 @@ function checkBidiAttack(text) {
 /**
  * Checks for shell injection patterns.
  * @param {string} text - The string to check.
+ * @param {string} [fieldPath] - Dot-notation path to the field (e.g. "pull_request.body").
+ *   Body fields (paths ending in ".body" or equal to "body") are Markdown, so the backtick
+ *   command-substitution pattern is skipped there to avoid false positives on inline code.
  * @returns {Array} Array of finding objects.
  */
-function checkShellInjection(text) {
+function checkShellInjection(text, fieldPath = '') {
+  const isMarkdownField = /(^|\.)body$/.test(fieldPath);
   const findings = [];
   for (const { pattern, name } of SHELL_INJECTION_PATTERNS) {
+    if (isMarkdownField && name === 'Backtick command substitution') continue;
     if (pattern.test(text)) {
       findings.push({
         type: 'shell_injection',
@@ -339,13 +344,15 @@ function checkPromptInjection(text) {
 /**
  * Scans a string value for all known attack vectors.
  * @param {string} text - The string to scan.
+ * @param {string} [fieldPath] - Dot-notation path to the field, forwarded to checks that
+ *   need field context (e.g. to skip backtick detection on Markdown body fields).
  * @returns {Array} Array of finding objects.
  */
-function scanString(text) {
+function scanString(text, fieldPath = '') {
   const findings = [];
   findings.push(...checkHiddenUnicode(text));
   findings.push(...checkBidiAttack(text));
-  findings.push(...checkShellInjection(text));
+  findings.push(...checkShellInjection(text, fieldPath));
   findings.push(...checkPathTraversal(text));
   findings.push(...checkScriptInjection(text));
   findings.push(...checkHomoglyphs(text));
@@ -363,7 +370,7 @@ function scanString(text) {
  */
 function scanValue(value, path = '', findings = []) {
   if (typeof value === 'string') {
-    const results = scanString(value);
+    const results = scanString(value, path);
     if (results.length > 0) {
       findings.push({ path, results, value });
     }

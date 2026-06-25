@@ -185,6 +185,28 @@ describe('checkShellInjection', () => {
     const findings = checkShellInjection('Fix: update dependencies and improve performance');
     expect(findings).toHaveLength(0);
   });
+
+  test('does NOT flag backticks in body fields (Markdown inline code — false positive guard)', () => {
+    // Dependabot PR bodies use backticks for package names: `dompurify` from `3.4.10` to `3.4.11`
+    const dependabotBody = 'Bumps `dompurify` from `3.4.10` to `3.4.11`.';
+    expect(checkShellInjection(dependabotBody, 'pull_request.body')).toHaveLength(0);
+    expect(checkShellInjection(dependabotBody, 'issue.body')).toHaveLength(0);
+    expect(checkShellInjection(dependabotBody, 'comment.body')).toHaveLength(0);
+    expect(checkShellInjection(dependabotBody, 'body')).toHaveLength(0);
+  });
+
+  test('still flags backtick command substitution in non-body fields', () => {
+    const findings = checkShellInjection('feature/`whoami`-test', 'pull_request.head.ref');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].type).toBe('shell_injection');
+    expect(findings[0].description).toContain('Backtick');
+  });
+
+  test('still flags $() in body fields (not normal Markdown)', () => {
+    const findings = checkShellInjection('$(cat /etc/passwd)', 'pull_request.body');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].type).toBe('shell_injection');
+  });
 });
 
 describe('checkPathTraversal', () => {
@@ -499,6 +521,19 @@ describe('scanValue', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0].path).toBe('pull_request.head.ref');
     expect(findings[0].results[0].type).toBe('shell_injection');
+  });
+
+  test('does NOT flag Dependabot PR body with backtick-wrapped package names', () => {
+    // Regression test for issue #33: backtick markdown inline code in body fields
+    // was triggering false positives on every Dependabot/Renovate PR.
+    const findings = scanValue({
+      pull_request: {
+        title: 'Bump dompurify from 3.4.10 to 3.4.11',
+        body: 'Bumps `dompurify` from `3.4.10` to `3.4.11`.\n\nRelease notes:\n- Fix `XSS` vulnerability',
+        head: { ref: 'dependabot/npm_and_yarn/dompurify-3.4.11' },
+      },
+    });
+    expect(findings).toHaveLength(0);
   });
 
   test('detects hidden unicode in issue title', () => {
