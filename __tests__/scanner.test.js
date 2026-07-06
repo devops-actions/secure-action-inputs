@@ -34,6 +34,18 @@ describe('checkHiddenUnicode', () => {
     expect(findings[0].description).toContain('U+0000');
   });
 
+  test('does not flag Zero Width Space used in the Dependabot/Renovate anti-mention pattern (@<ZWSP>username)', () => {
+    const findings = checkHiddenUnicode('Bumped by @\u200Boctocat and @\u200Bsome-user in #1');
+    expect(findings).toHaveLength(0);
+  });
+
+  test('still flags Zero Width Space when mixed with anti-mention occurrences', () => {
+    const findings = checkHiddenUnicode('@\u200Boctocat hello\u200Bworld');
+    expect(findings).toHaveLength(1);
+    expect(findings[0].description).toContain('U+200B');
+    expect(findings[0].count).toBe(1);
+  });
+
   test('detects left-to-right mark (U+200E)', () => {
     const findings = checkHiddenUnicode('hello\u200Eworld');
     expect(findings).toHaveLength(1);

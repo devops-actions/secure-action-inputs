@@ -194,6 +194,16 @@ const TEMPLATE_INJECTION_PATTERNS = [
 ];
 
 /**
+ * Matches the common "anti-mention" pattern used by bots like Dependabot and
+ * Renovate in auto-generated changelog/release-note text: a Zero Width Space
+ * inserted right after "@" and before a username (e.g. "@<ZWSP>octocat") so
+ * GitHub doesn't render a clickable/notifying mention. This is a benign,
+ * intentional formatting trick, not an attack, so it is excluded from the
+ * Zero Width Space finding to avoid false positives on dependency-bump PRs.
+ */
+const ZWSP_ANTI_MENTION_PATTERN = /@\u200B(?=[A-Za-z0-9-]+\b)/g;
+
+/**
  * Checks a string for hidden/invisible Unicode characters.
  * @param {string} text - The string to check.
  * @returns {Array} Array of finding objects.
@@ -201,7 +211,13 @@ const TEMPLATE_INJECTION_PATTERNS = [
 function checkHiddenUnicode(text) {
   const findings = [];
   for (const { pattern, name, codepoint } of HIDDEN_UNICODE_CHARS) {
-    const matches = text.match(pattern);
+    let scanText = text;
+    if (codepoint === 'U+200B') {
+      // Ignore Zero Width Spaces that are part of the "@<ZWSP>username"
+      // anti-mention pattern; count/flag only the remaining occurrences.
+      scanText = text.replace(ZWSP_ANTI_MENTION_PATTERN, '@');
+    }
+    const matches = scanText.match(pattern);
     if (matches) {
       findings.push({
         type: 'hidden_unicode',
