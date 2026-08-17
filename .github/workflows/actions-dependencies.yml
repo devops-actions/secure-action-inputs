@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   submit-dependencies:
-    uses: devops-actions/.github/.github/workflows/actions-dependencies.yml@72f72c4ce25d0ab32530f581be0de7e914365c29 # main
+    uses: devops-actions/.github/.github/workflows/actions-dependencies.yml@32339973f79273aa46e37f663e6b9bef0dd2fcd3 # main
     permissions:
       contents: write # Required to read workflow files
       id-token: write # Required for dependency submission
