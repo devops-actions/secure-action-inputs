@@ -8,6 +8,28 @@
 
 
 /**
+ * Severity tiers for findings.
+ * BLOCKING — the action fails the job (current behavior for all findings).
+ * WARNING — reported in the step summary and as job annotations, but the job
+ * succeeds. Used for context-free pattern matches in Markdown body fields
+ * (e.g. "../" or "exec()" appearing in quoted upstream changelog text), where
+ * the field never flows into a shell or filesystem context.
+ */
+const SEVERITY = { BLOCKING: 'blocking', WARNING: 'warning' };
+
+/**
+ * Returns true when a field path points to a Markdown body field:
+ * "body", "pull_request.body", "comment.body", or the old-body snapshot
+ * "changes.body.from". Body fields are free-form Markdown prose, so some
+ * patterns (inline backticks, quoted "../", "exec()" prose) are benign there.
+ * @param {string} fieldPath - Dot-notation path to the field.
+ * @returns {boolean}
+ */
+function isMarkdownField(fieldPath) {
+  return /(^|\.)body(\.|$)/.test(fieldPath);
+}
+
+/**
  * Hidden/invisible Unicode characters that can be used to obfuscate content.
  * These characters are typically invisible to the human eye but can be used
  * to hide malicious payloads or bypass security filters.
@@ -87,9 +109,17 @@ const SHELL_INJECTION_PATTERNS = [
     pattern: /&&\s*(rm|curl|wget|bash|sh|python|python3|perl|ruby|node)\b/i,
     name: 'AND operator chaining to shell command',
   },
-  { pattern: /\beval\s*\(/, name: 'eval() code execution' },
-  { pattern: /\bexec\s*\(/, name: 'exec() code execution' },
+  { pattern: /\beval\s*\(/, name: 'eval() code execution', bareInMarkdown: true },
+  { pattern: /\bexec\s*\(/, name: 'exec() code execution', bareInMarkdown: true },
 ];
+
+/**
+ * High-signal: exec()/eval() invoked with a command-like payload, e.g.
+ * exec("rm -rf ..."), exec('sh -c ...'), exec(`curl ...`). This is blocking on
+ * ALL fields including Markdown bodies — it is never benign prose.
+ */
+const EXEC_EVAL_COMMAND_PAYLOAD =
+  /\b(?:exec|eval)\s*\(\s*[`'"]?\s*(rm|sh|bash|zsh|curl|wget|nc|ncat|netcat|powershell|pwsh|python3?|perl|ruby|node|cmd)\b/i;
 
 /**
  * Script injection patterns such as HTML/JS injection.
@@ -253,19 +283,33 @@ function checkBidiAttack(text) {
  * Checks for shell injection patterns.
  * @param {string} text - The string to check.
  * @param {string} [fieldPath] - Dot-notation path to the field (e.g. "pull_request.body").
- *   Body fields (paths ending in ".body" or equal to "body") are Markdown, so the backtick
- *   command-substitution pattern is skipped there to avoid false positives on inline code.
+ *   Body fields (see isMarkdownField) are Markdown prose, so the backtick
+ *   command-substitution pattern is skipped there, and bare eval()/exec()
+ *   mentions (e.g. "fixed a bug in exec()" in a changelog) are downgraded to
+ *   WARNING. exec()/eval() with a command-like payload stays BLOCKING on all
+ *   fields.
  * @returns {Array} Array of finding objects.
  */
 function checkShellInjection(text, fieldPath = '') {
-  const isMarkdownField = /(^|\.)body$/.test(fieldPath);
+  const markdown = isMarkdownField(fieldPath);
   const findings = [];
-  for (const { pattern, name } of SHELL_INJECTION_PATTERNS) {
-    if (isMarkdownField && name === 'Backtick command substitution') continue;
+  const hasCommandPayload = EXEC_EVAL_COMMAND_PAYLOAD.test(text);
+  if (hasCommandPayload) {
+    findings.push({
+      type: 'shell_injection',
+      description: 'Potential shell injection: exec()/eval() with command payload',
+      severity: SEVERITY.BLOCKING,
+    });
+  }
+  for (const { pattern, name, bareInMarkdown } of SHELL_INJECTION_PATTERNS) {
+    if (markdown && name === 'Backtick command substitution') continue;
+    // The command-payload finding above already covers these matches.
+    if (hasCommandPayload && bareInMarkdown) continue;
     if (pattern.test(text)) {
       findings.push({
         type: 'shell_injection',
         description: `Potential shell injection: ${name}`,
+        severity: markdown && bareInMarkdown ? SEVERITY.WARNING : SEVERITY.BLOCKING,
       });
     }
   }
@@ -273,16 +317,48 @@ function checkShellInjection(text, fieldPath = '') {
 }
 
 /**
+ * High-signal path traversal patterns — BLOCKING on all fields, including
+ * Markdown bodies: URL-encoded/double-encoded traversal, chains of 2+
+ * traversals, and traversal reaching sensitive targets.
+ */
+const PATH_TRAVERSAL_HIGH_SIGNAL = [
+  { pattern: /%2e%2e/i, name: 'URL-encoded path traversal (%2e%2e)' },
+  { pattern: /%252e/i, name: 'Double URL-encoded path traversal (%252e)' },
+  { pattern: /\.\.%(2f|5c|252f|255c)/i, name: 'Mixed encoded path traversal (..%2f / ..%5c)' },
+  { pattern: /(\.\.[\\/]){2,}/, name: 'Chained path traversal (../../…)' },
+  {
+    pattern: /(\.\.[\\/]).*(etc[\\/]passwd|\.env\b|\.ssh\b|id_rsa|node_modules)/i,
+    name: 'Path traversal reaching sensitive target (/etc/passwd, .env, .ssh, id_rsa, node_modules)',
+  },
+];
+
+/**
  * Checks for path traversal patterns.
  * @param {string} text - The string to check.
+ * @param {string} [fieldPath] - Dot-notation path to the field. A bare "../" or
+ *   "..\" in a Markdown body field (e.g. a quoted relative path in a changelog)
+ *   is downgraded to WARNING; high-signal traversal (encoded, chained, or
+ *   reaching sensitive targets) stays BLOCKING everywhere.
  * @returns {Array} Array of finding objects.
  */
-function checkPathTraversal(text) {
+function checkPathTraversal(text, fieldPath = '') {
   const findings = [];
-  if (/\.\.\//.test(text) || /\.\.\\/.test(text)) {
+  let highSignal = false;
+  for (const { pattern, name } of PATH_TRAVERSAL_HIGH_SIGNAL) {
+    if (pattern.test(text)) {
+      highSignal = true;
+      findings.push({
+        type: 'path_traversal',
+        description: `Path traversal pattern detected: ${name}`,
+        severity: SEVERITY.BLOCKING,
+      });
+    }
+  }
+  if (!highSignal && (/\.\.\//.test(text) || /\.\.\\/.test(text))) {
     findings.push({
       type: 'path_traversal',
       description: 'Path traversal pattern detected (../ or ..\\)',
+      severity: isMarkdownField(fieldPath) ? SEVERITY.WARNING : SEVERITY.BLOCKING,
     });
   }
   return findings;
@@ -376,11 +452,15 @@ function scanString(text, fieldPath = '') {
   findings.push(...checkHiddenUnicode(text));
   findings.push(...checkBidiAttack(text));
   findings.push(...checkShellInjection(text, fieldPath));
-  findings.push(...checkPathTraversal(text));
+  findings.push(...checkPathTraversal(text, fieldPath));
   findings.push(...checkScriptInjection(text));
   findings.push(...checkHomoglyphs(text));
   findings.push(...checkTemplateInjection(text));
   findings.push(...checkPromptInjection(text));
+  // All other checks are high-signal and stay blocking on every field.
+  for (const finding of findings) {
+    if (!finding.severity) finding.severity = SEVERITY.BLOCKING;
+  }
   return findings;
 }
 
@@ -410,6 +490,8 @@ function scanValue(value, path = '', findings = []) {
 }
 
 module.exports = {
+  SEVERITY,
+  isMarkdownField,
   scanString,
   scanValue,
   checkHiddenUnicode,
@@ -472,8 +554,7 @@ module.exports = require("https");
 /******/ 	}
 /******/ 	
 /************************************************************************/
-/******/ 	/* webpack/runtime/compat */
-/******/ 	
+/******/ 	/* webpack/runtime/asset-relocator-loader */
 /******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
 /******/ 	
 /************************************************************************/
@@ -482,7 +563,7 @@ var __webpack_exports__ = {};
 
 const fs = __nccwpck_require__(896);
 const https = __nccwpck_require__(692);
-const { scanValue, scanString } = __nccwpck_require__(863);
+const { scanValue, scanString, SEVERITY } = __nccwpck_require__(863);
 
 /**
  * GitHub Actions workflow commands implemented without external dependencies.
@@ -635,6 +716,29 @@ const LEGEND = {
 };
 
 /**
+ * Renders one findings table (and optional context snippets) for a severity tier.
+ * @param {Array} entries - Array of { path, results, value } with results of one severity.
+ * @param {boolean} showContext - Whether to include per-finding context snippets.
+ * @returns {string[]} Markdown lines.
+ */
+function buildFindingsTable(entries, showContext) {
+  const lines = ['| Field | Attack Type | Details |', '|-------|-------------|---------|'];
+  for (const finding of entries) {
+    for (const result of finding.results) {
+      const countNote = result.count ? ` (×${result.count})` : '';
+      lines.push(
+        `| \`${escapeMarkdown(finding.path)}\` | ${result.type} | ${escapeMarkdown(result.description)}${countNote} |`,
+      );
+    }
+    if (showContext) {
+      lines.push(buildContextSnippet(finding));
+    }
+  }
+  lines.push('');
+  return lines;
+}
+
+/**
  * Builds the markdown summary content for the step summary or PR comment.
  * @param {Array} findings - Array of { path, results, value } finding objects.
  * @param {boolean} showContext - Whether to include per-finding context snippets.
@@ -650,31 +754,43 @@ function buildSummary(findings, showContext = true) {
     ].join('\n');
   }
 
-  const totalIssues = findings.reduce((sum, f) => sum + f.results.length, 0);
+  const isWarning = (r) => r.severity === SEVERITY.WARNING;
+  const split = (severityFilter) =>
+    findings
+      .map((f) => ({ ...f, results: f.results.filter(severityFilter) }))
+      .filter((f) => f.results.length > 0);
+  const blocking = split((r) => !isWarning(r));
+  const warnings = split(isWarning);
+  const countOf = (entries) => entries.reduce((sum, f) => sum + f.results.length, 0);
+  const totalBlocking = countOf(blocking);
+  const totalWarnings = countOf(warnings);
   const foundTypes = new Set(findings.flatMap((f) => f.results.map((r) => r.type)));
 
-  const lines = [
-    '## 🛡️ Secure Action Inputs — Security Scan Results',
-    '',
-    `> ⚠️ **${totalIssues} potential security issue(s) detected across ${findings.length} field(s) in the event payload.**`,
-    '',
-    '| Field | Attack Type | Details |',
-    '|-------|-------------|---------|',
-  ];
-
-  for (const finding of findings) {
-    for (const result of finding.results) {
-      const countNote = result.count ? ` (×${result.count})` : '';
+  const lines = ['## 🛡️ Secure Action Inputs — Security Scan Results', ''];
+  if (totalBlocking > 0) {
+    lines.push(
+      `> ❌ **${totalBlocking} blocking security issue(s) detected — this job fails.**` +
+        (totalWarnings > 0 ? ` ${totalWarnings} warning(s) also reported below.` : ''),
+      '',
+      '### ❌ Blocking findings',
+      '',
+      ...buildFindingsTable(blocking, showContext),
+    );
+  }
+  if (totalWarnings > 0) {
+    if (totalBlocking === 0) {
       lines.push(
-        `| \`${escapeMarkdown(finding.path)}\` | ${result.type} | ${escapeMarkdown(result.description)}${countNote} |`,
+        `> ⚠️ **${totalWarnings} warning(s) detected in the event payload. These are lower-confidence matches in Markdown body fields and do not fail the job.**`,
+        '',
       );
     }
-    if (showContext) {
-      lines.push(buildContextSnippet(finding));
-    }
+    lines.push(
+      '### ⚠️ Warnings (reported only — job does not fail)',
+      '',
+      ...buildFindingsTable(warnings, showContext),
+    );
   }
 
-  lines.push('');
   lines.push('### Attack Types Legend');
   lines.push('');
   lines.push('| Type | Description |');
@@ -906,20 +1022,34 @@ async function run() {
     if (findings.length === 0) {
       core.info('Security scan complete: No threats detected.');
     } else {
-      const totalIssues = findings.reduce((sum, f) => sum + f.results.length, 0);
+      let blockingCount = 0;
+      let warningCount = 0;
 
       for (const finding of findings) {
         for (const result of finding.results) {
           const countNote = result.count ? ` (×${result.count})` : '';
-          core.error(
-            `[${result.type}] ${finding.path}: ${truncate(result.description)}${countNote}`,
-          );
+          const message = `[${result.type}] ${finding.path}: ${truncate(result.description)}${countNote}`;
+          if (result.severity === SEVERITY.WARNING) {
+            warningCount++;
+            core.warning(message);
+          } else {
+            blockingCount++;
+            core.error(message);
+          }
         }
       }
 
-      core.setFailed(
-        `Security scan failed: ${totalIssues} potential attack vector(s) found in ${findings.length} field(s). See the step summary for details.`,
-      );
+      if (blockingCount > 0) {
+        core.setFailed(
+          `Security scan failed: ${blockingCount} blocking attack vector(s) found` +
+            (warningCount > 0 ? ` (plus ${warningCount} warning(s))` : '') +
+            '. See the step summary for details.',
+        );
+      } else {
+        core.info(
+          `Security scan complete: ${warningCount} warning(s) reported (no blocking issues). See the step summary for details.`,
+        );
+      }
     }
   } catch (error) {
     core.setFailed(`Action failed with unexpected error: ${error.message}`);

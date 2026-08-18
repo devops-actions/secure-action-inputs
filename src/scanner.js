@@ -1,6 +1,28 @@
 'use strict';
 
 /**
+ * Severity tiers for findings.
+ * BLOCKING — the action fails the job (current behavior for all findings).
+ * WARNING — reported in the step summary and as job annotations, but the job
+ * succeeds. Used for context-free pattern matches in Markdown body fields
+ * (e.g. "../" or "exec()" appearing in quoted upstream changelog text), where
+ * the field never flows into a shell or filesystem context.
+ */
+const SEVERITY = { BLOCKING: 'blocking', WARNING: 'warning' };
+
+/**
+ * Returns true when a field path points to a Markdown body field:
+ * "body", "pull_request.body", "comment.body", or the old-body snapshot
+ * "changes.body.from". Body fields are free-form Markdown prose, so some
+ * patterns (inline backticks, quoted "../", "exec()" prose) are benign there.
+ * @param {string} fieldPath - Dot-notation path to the field.
+ * @returns {boolean}
+ */
+function isMarkdownField(fieldPath) {
+  return /(^|\.)body(\.|$)/.test(fieldPath);
+}
+
+/**
  * Hidden/invisible Unicode characters that can be used to obfuscate content.
  * These characters are typically invisible to the human eye but can be used
  * to hide malicious payloads or bypass security filters.
@@ -80,9 +102,17 @@ const SHELL_INJECTION_PATTERNS = [
     pattern: /&&\s*(rm|curl|wget|bash|sh|python|python3|perl|ruby|node)\b/i,
     name: 'AND operator chaining to shell command',
   },
-  { pattern: /\beval\s*\(/, name: 'eval() code execution' },
-  { pattern: /\bexec\s*\(/, name: 'exec() code execution' },
+  { pattern: /\beval\s*\(/, name: 'eval() code execution', bareInMarkdown: true },
+  { pattern: /\bexec\s*\(/, name: 'exec() code execution', bareInMarkdown: true },
 ];
+
+/**
+ * High-signal: exec()/eval() invoked with a command-like payload, e.g.
+ * exec("rm -rf ..."), exec('sh -c ...'), exec(`curl ...`). This is blocking on
+ * ALL fields including Markdown bodies — it is never benign prose.
+ */
+const EXEC_EVAL_COMMAND_PAYLOAD =
+  /\b(?:exec|eval)\s*\(\s*[`'"]?\s*(rm|sh|bash|zsh|curl|wget|nc|ncat|netcat|powershell|pwsh|python3?|perl|ruby|node|cmd)\b/i;
 
 /**
  * Script injection patterns such as HTML/JS injection.
@@ -246,19 +276,33 @@ function checkBidiAttack(text) {
  * Checks for shell injection patterns.
  * @param {string} text - The string to check.
  * @param {string} [fieldPath] - Dot-notation path to the field (e.g. "pull_request.body").
- *   Body fields (paths ending in ".body" or equal to "body") are Markdown, so the backtick
- *   command-substitution pattern is skipped there to avoid false positives on inline code.
+ *   Body fields (see isMarkdownField) are Markdown prose, so the backtick
+ *   command-substitution pattern is skipped there, and bare eval()/exec()
+ *   mentions (e.g. "fixed a bug in exec()" in a changelog) are downgraded to
+ *   WARNING. exec()/eval() with a command-like payload stays BLOCKING on all
+ *   fields.
  * @returns {Array} Array of finding objects.
  */
 function checkShellInjection(text, fieldPath = '') {
-  const isMarkdownField = /(^|\.)body$/.test(fieldPath);
+  const markdown = isMarkdownField(fieldPath);
   const findings = [];
-  for (const { pattern, name } of SHELL_INJECTION_PATTERNS) {
-    if (isMarkdownField && name === 'Backtick command substitution') continue;
+  const hasCommandPayload = EXEC_EVAL_COMMAND_PAYLOAD.test(text);
+  if (hasCommandPayload) {
+    findings.push({
+      type: 'shell_injection',
+      description: 'Potential shell injection: exec()/eval() with command payload',
+      severity: SEVERITY.BLOCKING,
+    });
+  }
+  for (const { pattern, name, bareInMarkdown } of SHELL_INJECTION_PATTERNS) {
+    if (markdown && name === 'Backtick command substitution') continue;
+    // The command-payload finding above already covers these matches.
+    if (hasCommandPayload && bareInMarkdown) continue;
     if (pattern.test(text)) {
       findings.push({
         type: 'shell_injection',
         description: `Potential shell injection: ${name}`,
+        severity: markdown && bareInMarkdown ? SEVERITY.WARNING : SEVERITY.BLOCKING,
       });
     }
   }
@@ -266,16 +310,48 @@ function checkShellInjection(text, fieldPath = '') {
 }
 
 /**
+ * High-signal path traversal patterns — BLOCKING on all fields, including
+ * Markdown bodies: URL-encoded/double-encoded traversal, chains of 2+
+ * traversals, and traversal reaching sensitive targets.
+ */
+const PATH_TRAVERSAL_HIGH_SIGNAL = [
+  { pattern: /%2e%2e/i, name: 'URL-encoded path traversal (%2e%2e)' },
+  { pattern: /%252e/i, name: 'Double URL-encoded path traversal (%252e)' },
+  { pattern: /\.\.%(2f|5c|252f|255c)/i, name: 'Mixed encoded path traversal (..%2f / ..%5c)' },
+  { pattern: /(\.\.[\\/]){2,}/, name: 'Chained path traversal (../../…)' },
+  {
+    pattern: /(\.\.[\\/]).*(etc[\\/]passwd|\.env\b|\.ssh\b|id_rsa|node_modules)/i,
+    name: 'Path traversal reaching sensitive target (/etc/passwd, .env, .ssh, id_rsa, node_modules)',
+  },
+];
+
+/**
  * Checks for path traversal patterns.
  * @param {string} text - The string to check.
+ * @param {string} [fieldPath] - Dot-notation path to the field. A bare "../" or
+ *   "..\" in a Markdown body field (e.g. a quoted relative path in a changelog)
+ *   is downgraded to WARNING; high-signal traversal (encoded, chained, or
+ *   reaching sensitive targets) stays BLOCKING everywhere.
  * @returns {Array} Array of finding objects.
  */
-function checkPathTraversal(text) {
+function checkPathTraversal(text, fieldPath = '') {
   const findings = [];
-  if (/\.\.\//.test(text) || /\.\.\\/.test(text)) {
+  let highSignal = false;
+  for (const { pattern, name } of PATH_TRAVERSAL_HIGH_SIGNAL) {
+    if (pattern.test(text)) {
+      highSignal = true;
+      findings.push({
+        type: 'path_traversal',
+        description: `Path traversal pattern detected: ${name}`,
+        severity: SEVERITY.BLOCKING,
+      });
+    }
+  }
+  if (!highSignal && (/\.\.\//.test(text) || /\.\.\\/.test(text))) {
     findings.push({
       type: 'path_traversal',
       description: 'Path traversal pattern detected (../ or ..\\)',
+      severity: isMarkdownField(fieldPath) ? SEVERITY.WARNING : SEVERITY.BLOCKING,
     });
   }
   return findings;
@@ -369,11 +445,15 @@ function scanString(text, fieldPath = '') {
   findings.push(...checkHiddenUnicode(text));
   findings.push(...checkBidiAttack(text));
   findings.push(...checkShellInjection(text, fieldPath));
-  findings.push(...checkPathTraversal(text));
+  findings.push(...checkPathTraversal(text, fieldPath));
   findings.push(...checkScriptInjection(text));
   findings.push(...checkHomoglyphs(text));
   findings.push(...checkTemplateInjection(text));
   findings.push(...checkPromptInjection(text));
+  // All other checks are high-signal and stay blocking on every field.
+  for (const finding of findings) {
+    if (!finding.severity) finding.severity = SEVERITY.BLOCKING;
+  }
   return findings;
 }
 
@@ -403,6 +483,8 @@ function scanValue(value, path = '', findings = []) {
 }
 
 module.exports = {
+  SEVERITY,
+  isMarkdownField,
   scanString,
   scanValue,
   checkHiddenUnicode,

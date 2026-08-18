@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const https = require('https');
-const { scanValue, scanString } = require('./scanner');
+const { scanValue, scanString, SEVERITY } = require('./scanner');
 
 /**
  * GitHub Actions workflow commands implemented without external dependencies.
@@ -155,6 +155,29 @@ const LEGEND = {
 };
 
 /**
+ * Renders one findings table (and optional context snippets) for a severity tier.
+ * @param {Array} entries - Array of { path, results, value } with results of one severity.
+ * @param {boolean} showContext - Whether to include per-finding context snippets.
+ * @returns {string[]} Markdown lines.
+ */
+function buildFindingsTable(entries, showContext) {
+  const lines = ['| Field | Attack Type | Details |', '|-------|-------------|---------|'];
+  for (const finding of entries) {
+    for (const result of finding.results) {
+      const countNote = result.count ? ` (×${result.count})` : '';
+      lines.push(
+        `| \`${escapeMarkdown(finding.path)}\` | ${result.type} | ${escapeMarkdown(result.description)}${countNote} |`,
+      );
+    }
+    if (showContext) {
+      lines.push(buildContextSnippet(finding));
+    }
+  }
+  lines.push('');
+  return lines;
+}
+
+/**
  * Builds the markdown summary content for the step summary or PR comment.
  * @param {Array} findings - Array of { path, results, value } finding objects.
  * @param {boolean} showContext - Whether to include per-finding context snippets.
@@ -170,31 +193,43 @@ function buildSummary(findings, showContext = true) {
     ].join('\n');
   }
 
-  const totalIssues = findings.reduce((sum, f) => sum + f.results.length, 0);
+  const isWarning = (r) => r.severity === SEVERITY.WARNING;
+  const split = (severityFilter) =>
+    findings
+      .map((f) => ({ ...f, results: f.results.filter(severityFilter) }))
+      .filter((f) => f.results.length > 0);
+  const blocking = split((r) => !isWarning(r));
+  const warnings = split(isWarning);
+  const countOf = (entries) => entries.reduce((sum, f) => sum + f.results.length, 0);
+  const totalBlocking = countOf(blocking);
+  const totalWarnings = countOf(warnings);
   const foundTypes = new Set(findings.flatMap((f) => f.results.map((r) => r.type)));
 
-  const lines = [
-    '## 🛡️ Secure Action Inputs — Security Scan Results',
-    '',
-    `> ⚠️ **${totalIssues} potential security issue(s) detected across ${findings.length} field(s) in the event payload.**`,
-    '',
-    '| Field | Attack Type | Details |',
-    '|-------|-------------|---------|',
-  ];
-
-  for (const finding of findings) {
-    for (const result of finding.results) {
-      const countNote = result.count ? ` (×${result.count})` : '';
+  const lines = ['## 🛡️ Secure Action Inputs — Security Scan Results', ''];
+  if (totalBlocking > 0) {
+    lines.push(
+      `> ❌ **${totalBlocking} blocking security issue(s) detected — this job fails.**` +
+        (totalWarnings > 0 ? ` ${totalWarnings} warning(s) also reported below.` : ''),
+      '',
+      '### ❌ Blocking findings',
+      '',
+      ...buildFindingsTable(blocking, showContext),
+    );
+  }
+  if (totalWarnings > 0) {
+    if (totalBlocking === 0) {
       lines.push(
-        `| \`${escapeMarkdown(finding.path)}\` | ${result.type} | ${escapeMarkdown(result.description)}${countNote} |`,
+        `> ⚠️ **${totalWarnings} warning(s) detected in the event payload. These are lower-confidence matches in Markdown body fields and do not fail the job.**`,
+        '',
       );
     }
-    if (showContext) {
-      lines.push(buildContextSnippet(finding));
-    }
+    lines.push(
+      '### ⚠️ Warnings (reported only — job does not fail)',
+      '',
+      ...buildFindingsTable(warnings, showContext),
+    );
   }
 
-  lines.push('');
   lines.push('### Attack Types Legend');
   lines.push('');
   lines.push('| Type | Description |');
@@ -426,20 +461,34 @@ async function run() {
     if (findings.length === 0) {
       core.info('Security scan complete: No threats detected.');
     } else {
-      const totalIssues = findings.reduce((sum, f) => sum + f.results.length, 0);
+      let blockingCount = 0;
+      let warningCount = 0;
 
       for (const finding of findings) {
         for (const result of finding.results) {
           const countNote = result.count ? ` (×${result.count})` : '';
-          core.error(
-            `[${result.type}] ${finding.path}: ${truncate(result.description)}${countNote}`,
-          );
+          const message = `[${result.type}] ${finding.path}: ${truncate(result.description)}${countNote}`;
+          if (result.severity === SEVERITY.WARNING) {
+            warningCount++;
+            core.warning(message);
+          } else {
+            blockingCount++;
+            core.error(message);
+          }
         }
       }
 
-      core.setFailed(
-        `Security scan failed: ${totalIssues} potential attack vector(s) found in ${findings.length} field(s). See the step summary for details.`,
-      );
+      if (blockingCount > 0) {
+        core.setFailed(
+          `Security scan failed: ${blockingCount} blocking attack vector(s) found` +
+            (warningCount > 0 ? ` (plus ${warningCount} warning(s))` : '') +
+            '. See the step summary for details.',
+        );
+      } else {
+        core.info(
+          `Security scan complete: ${warningCount} warning(s) reported (no blocking issues). See the step summary for details.`,
+        );
+      }
     }
   } catch (error) {
     core.setFailed(`Action failed with unexpected error: ${error.message}`);

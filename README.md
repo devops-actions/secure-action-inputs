@@ -14,10 +14,19 @@ When a threat is found the step fails with a non-zero exit code and writes a det
 | **Hidden Unicode** | Zero-width spaces (U+200B/C/D), BOM (U+FEFF), soft hyphen, null byte, LTR/RTL marks, word joiner, line/paragraph separators |
 | **Bidirectional / Trojan Source** | All BIDI control characters (U+202A–202E, U+2066–2069, U+061C) that make malicious content appear benign to reviewers |
 | **Shell injection** | Backtick substitution `` `cmd` ``, dollar-paren `$(cmd)`, `eval()`/`exec()` code execution, semicolon/pipe chaining to `bash`, `curl`, `python`, etc. |
-| **Path traversal** | `../` and `..\` sequences that can escape intended directories |
+| **Path traversal** | `../` and `..\` sequences that can escape intended directories, incl. URL-encoded (`%2e%2e%2f`), chained (`../../..`), and traversal reaching sensitive targets (`.env`, `.ssh`, `/etc/passwd`) |
 | **Script injection** | `<script>`, `javascript:`, `<iframe>`, `onerror=` and other HTML event handler attributes |
 | **Template/expression injection** | `${{` (GitHub Actions context leakage) and `{{...}}` template expressions |
 | **Prompt injection** | AI/LLM override phrases such as `ignore previous instructions`, `pretend you are`, `jailbreak`, and other directives designed to manipulate AI assistants that process event data |
+
+## Severity tiers: blocking vs warning
+
+Findings are classified into two severity tiers:
+
+- **Blocking** — the step fails (`::error::` annotations). This covers all high-signal patterns on every field: hidden Unicode, bidi/Trojan Source, homoglyphs, prompt injection, `${{`/`$(...)`/backticks, command chaining, `<script>`, URL-encoded or chained path traversal, traversal reaching sensitive targets, and `exec()`/`eval()` with a command-like payload (e.g. `exec("rm -rf …")`).
+- **Warning** — reported in the step summary and as `::warning::` annotations, but the step **succeeds**. This covers context-free matches in Markdown body fields (`pull_request.body`, issue bodies, comment bodies, `changes.body.from`) that are almost always benign prose: a bare `../` / `..\` (e.g. a quoted `"path": "../pkg"` in a changelog) and bare `exec()` / `eval()` mentions (e.g. "fix a bug in exec()").
+
+Rationale: Dependabot and Renovate PR bodies embed arbitrary upstream release notes and changelogs, which routinely mention relative paths and functions like `exec()`. Those mentions never flow into a shell or filesystem context, so failing the job on them produces false positives that block dependency auto-merge — while the blocking tier still catches real attack vectors in the same bodies.
 
 ## Usage
 
@@ -120,7 +129,7 @@ When the `post-comment` input is enabled (default), the same report is posted (o
 4. Results are aggregated and written to `$GITHUB_STEP_SUMMARY`.
 5. When `show-context: true` (default), each finding includes a collapsible snippet showing the matched line ± 2 lines of surrounding context.
 6. When `post-comment: true` (default) and the event is a PR or issue, the same report is posted (or updated) as a comment on the PR/issue.
-7. If any findings exist, `process.exitCode` is set to `1` to fail the step.
+7. If any **blocking** findings exist, `process.exitCode` is set to `1` to fail the step. **Warning** findings (lower-confidence matches in Markdown body fields) are reported in the summary and as annotations but do not fail the step.
 
 The action has **zero runtime dependencies** — all logic is bundled into `dist/index.js` with `@vercel/ncc`, and GitHub Actions workflow commands are issued directly over stdout to avoid supply-chain risk from transitive dependencies.
 
