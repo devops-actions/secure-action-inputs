@@ -1,0 +1,42 @@
+{
+  "action": "synchronize",
+  "number": 232,
+  "pull_request": {
+    "number": 232,
+    "title": "fix: grant issues and pull-requests write to scan-inputs job",
+    "body": "Grants `issues: write` and `pull-requests: write` to the `scan-inputs` job.",
+    "base": {
+      "ref": "main",
+      "repo": {
+        "id": 400000001,
+        "name": "actionlint",
+        "full_name": "devops-actions/actionlint",
+        "fork": false,
+        "description": "Action wrapper for `rhysd/actionlint`",
+        "homepage": null,
+        "topics": []
+      }
+    },
+    "head": {
+      "ref": "fix/workflow-permissions",
+      "repo": {
+        "id": 400000001,
+        "name": "actionlint",
+        "full_name": "devops-actions/actionlint",
+        "fork": false,
+        "description": "Action wrapper for `rhysd/actionlint`",
+        "homepage": null,
+        "topics": []
+      }
+    }
+  },
+  "repository": {
+    "id": 400000001,
+    "name": "actionlint",
+    "full_name": "devops-actions/actionlint",
+    "fork": false,
+    "description": "Action wrapper for `rhysd/actionlint`",
+    "homepage": null,
+    "topics": []
+  }
+}

