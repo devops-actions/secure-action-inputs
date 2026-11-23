@@ -434,6 +434,44 @@ function checkPromptInjection(text) {
 }
 
 /**
+ * Repository-metadata fields that are set through repository settings, not by
+ * whoever opens an issue, PR, or comment.
+ */
+const REPO_METADATA_FIELDS = new Set(['description', 'homepage', 'topics', 'custom_properties']);
+
+/**
+ * Returns true when a field path is repository metadata on a repo object whose
+ * owner is trusted, so it is not treated as untrusted input.
+ *
+ * Trust reasoning:
+ * - `repository` is the repository the workflow runs in. Its description,
+ *   homepage, topics and custom properties can only be changed by its admins,
+ *   so they are not attacker-controlled input (e.g. a description such as
+ *   "Action wrapper for `rhysd/actionlint`" must not trip the backtick rule).
+ * - `pull_request.base.repo` is the PR's target repository, i.e. the
+ *   repository receiving the PR, so the same reasoning applies.
+ * - `pull_request.head.repo` is only trusted when it is the same repository as
+ *   the base (a same-repo branch PR). For a fork PR, head.repo is the fork, and
+ *   the fork owner — the person opening the PR — controls its description,
+ *   homepage and topics. Those fields ARE attacker-controlled, so they stay in
+ *   scope for fork PRs.
+ *
+ * @param {string} fieldPath - Dot-notation path to the field.
+ * @param {object} root - The full event payload, used to compare head and base repos.
+ * @returns {boolean}
+ */
+function isTrustedRepoMetadataField(fieldPath, root) {
+  const match = /^(repository|pull_request\.base\.repo|pull_request\.head\.repo)\.([^.[]+)$/.exec(fieldPath);
+  if (!match || !REPO_METADATA_FIELDS.has(match[2])) return false;
+  if (match[1] !== 'pull_request.head.repo') return true;
+  const head = root?.pull_request?.head?.repo;
+  const base = root?.pull_request?.base?.repo;
+  if (!head || !base) return false;
+  if (head.id != null && base.id != null) return head.id === base.id;
+  return Boolean(head.full_name) && head.full_name === base.full_name;
+}
+
+/**
  * Scans a string value for all known attack vectors.
  * @param {string} text - The string to scan.
  * @param {string} [fieldPath] - Dot-notation path to the field, forwarded to checks that
@@ -462,9 +500,11 @@ function scanString(text, fieldPath = '') {
  * @param {*} value - The value to scan (string, array, or object).
  * @param {string} path - The dot-notation path to the current value.
  * @param {Array} findings - Accumulated findings array.
+ * @param {*} [root] - The top-level payload (defaults to value); used to decide
+ *   whether repository-metadata fields are trusted (see isTrustedRepoMetadataField).
  * @returns {Array} Array of objects with { path, results } for each affected field.
  */
-function scanValue(value, path = '', findings = []) {
+function scanValue(value, path = '', findings = [], root = value) {
   if (typeof value === 'string') {
     const results = scanString(value, path);
     if (results.length > 0) {
@@ -472,11 +512,13 @@ function scanValue(value, path = '', findings = []) {
     }
   } else if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
-      scanValue(value[i], `${path}[${i}]`, findings);
+      scanValue(value[i], `${path}[${i}]`, findings, root);
     }
   } else if (value !== null && typeof value === 'object') {
     for (const key of Object.keys(value)) {
-      scanValue(value[key], path ? `${path}.${key}` : key, findings);
+      const childPath = path ? `${path}.${key}` : key;
+      if (isTrustedRepoMetadataField(childPath, root)) continue;
+      scanValue(value[key], childPath, findings, root);
     }
   }
   return findings;
@@ -485,6 +527,7 @@ function scanValue(value, path = '', findings = []) {
 module.exports = {
   SEVERITY,
   isMarkdownField,
+  isTrustedRepoMetadataField,
   scanString,
   scanValue,
   checkHiddenUnicode,
